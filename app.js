@@ -61,15 +61,20 @@
     return (a * b) / (a + b);
   }
 
-  function joinSeriesFormula(names) {
+  function joinSeries(names) {
     return names.join("+");
+  }
+
+  function sumValues(arr) {
+    return arr.reduce((a, r) => a + r.value, 0);
   }
 
   function newProblem() {
     const k = randInt(2, 10);
 
     const chosen = new Set();
-    // ensure parallel part exists
+    // Ensure at least one resistor on the middle vertical branch AND at least one on the right branch
+    // (so there is a real parallel part)
     chosen.add(pick(GROUPS.vert));
     chosen.add(pick(GROUPS.rightBranch));
 
@@ -85,34 +90,30 @@
     const slotToR = {};
     for (const r of resistors) slotToR[r.slot] = r;
 
-    const sum = (arr) => arr.reduce((a, r) => a + r.value, 0);
+    // Collect series groups in order along the schematic
+    const A_to_mid = GROUPS.leftTop.map(s => slotToR[s]).filter(Boolean);     // A -> upper-middle
+    const mid_to_B = GROUPS.leftBot.map(s => slotToR[s]).filter(Boolean);     // lower-middle -> B
 
-    const R_leftTop_list = GROUPS.leftTop.map(s => slotToR[s]).filter(Boolean);
-    const R_leftBot_list = GROUPS.leftBot.map(s => slotToR[s]).filter(Boolean);
+    const middle_branch = GROUPS.vert.map(s => slotToR[s]).filter(Boolean);   // middle vertical (series)
+    const right_branch = [
+      ...GROUPS.rightTop.map(s => slotToR[s]).filter(Boolean),
+      ...GROUPS.rightBot.map(s => slotToR[s]).filter(Boolean)
+    ]; // series via right-side short
 
-    const R_vert_list = GROUPS.vert.map(s => slotToR[s]).filter(Boolean);
-    const R_rightTop_list = GROUPS.rightTop.map(s => slotToR[s]).filter(Boolean);
-    const R_rightBot_list = GROUPS.rightBot.map(s => slotToR[s]).filter(Boolean);
+    const S1 = sumValues(A_to_mid);
+    const S2 = sumValues(middle_branch);
+    const S3 = sumValues(right_branch);
+    const S4 = sumValues(mid_to_B);
 
-    const R_leftTop = sum(R_leftTop_list);
-    const R_leftBot = sum(R_leftBot_list);
-    const R_vert = sum(R_vert_list);
-    const R_right = sum(R_rightTop_list) + sum(R_rightBot_list);
-
-    const R_mid = parallel2(R_vert, R_right);
-    const Re = R_leftTop + R_mid + R_leftBot;
+    const Re_par = parallel2(S2, S3);
+    const Re = S1 + Re_par + S4;
 
     state = {
       chosen,
       resistors,
       slotToR,
       Re,
-      breakdown: {
-        R_leftTop_list, R_leftBot_list,
-        R_vert_list,
-        R_rightTop_list, R_rightBot_list,
-        R_leftTop, R_leftBot, R_vert, R_right, R_mid
-      }
+      groups: { A_to_mid, middle_branch, right_branch, mid_to_B, S1, S2, S3, S4, Re_par }
     };
 
     ansEl.value = "";
@@ -122,7 +123,7 @@
   }
 
   function buildWork() {
-    const b = state.breakdown;
+    const g = state.groups;
     const lines = [];
 
     lines.push("Jelölések:");
@@ -137,46 +138,52 @@
       .forEach(r => lines.push(`  ${r.name} = ${r.value} Ω`));
     lines.push("");
 
-    if (b.R_leftTop_list.length > 0) {
-      const names = b.R_leftTop_list.map(r => r.name);
-      lines.push("1) Bal felső rész (soros):");
-      lines.push(`   Re_leftTop = ${joinSeriesFormula(names)} = ${fmt2(b.R_leftTop)} Ω`);
-      lines.push("");
+    // 1) Series reductions first (as requested)
+    lines.push("1) Soros kapcsolások összevonása:");
+
+    // S1: A -> közép (felső)
+    if (g.A_to_mid.length) {
+      const n = g.A_to_mid.map(r => r.name);
+      lines.push(`   A → közép (felső): ${joinSeries(n)} = ${fmt2(g.S1)} Ω`);
     } else {
-      lines.push("1) Bal felső rész: nincs ellenállás (vezeték), ezért Re_leftTop = 0 Ω");
-      lines.push("");
+      lines.push(`   A → közép (felső): nincs ellenállás (vezeték) = 0.00 Ω`);
     }
 
-    if (b.R_leftBot_list.length > 0) {
-      const names = b.R_leftBot_list.map(r => r.name);
-      lines.push("2) Bal alsó rész (soros):");
-      lines.push(`   Re_leftBot = ${joinSeriesFormula(names)} = ${fmt2(b.R_leftBot)} Ω`);
-      lines.push("");
-    } else {
-      lines.push("2) Bal alsó rész: nincs ellenállás (vezeték), ezért Re_leftBot = 0 Ω");
-      lines.push("");
+    // S2: középső függőleges ág
+    {
+      const n = g.middle_branch.map(r => r.name);
+      // ensured at least one
+      lines.push(`   Középső ág: ${joinSeries(n)} = ${fmt2(g.S2)} Ω`);
     }
 
-    const vNames = b.R_vert_list.map(r => r.name);
-    lines.push("3) Középső ág (soros):");
-    lines.push(`   Re_vert = ${joinSeriesFormula(vNames)} = ${fmt2(b.R_vert)} Ω`);
+    // S3: jobb oldali ág
+    {
+      const n = g.right_branch.map(r => r.name);
+      lines.push(`   Jobb oldali ág: ${joinSeries(n)} = ${fmt2(g.S3)} Ω`);
+    }
+
+    // S4: közép (alsó) -> B
+    if (g.mid_to_B.length) {
+      const n = g.mid_to_B.map(r => r.name);
+      lines.push(`   közép (alsó) → B: ${joinSeries(n)} = ${fmt2(g.S4)} Ω`);
+    } else {
+      lines.push(`   közép (alsó) → B: nincs ellenállás (vezeték) = 0.00 Ω`);
+    }
+
     lines.push("");
 
-    const rNames = [...b.R_rightTop_list, ...b.R_rightBot_list].map(r => r.name);
-    lines.push("4) Jobb oldali kerülő ág (soros):");
-    lines.push(`   Re_right = ${joinSeriesFormula(rNames)} = ${fmt2(b.R_right)} Ω`);
+    // 2) Parallel reduction
+    lines.push("2) Párhuzamos kapcsolás összevonása (a két ág egymás mellett van):");
+    lines.push("        R1×R2");
+    lines.push("   Re1 = -----  =");
+    lines.push("        R1+R2");
+    lines.push(`   Re1 = (${fmt2(g.S2)} × ${fmt2(g.S3)}) / (${fmt2(g.S2)} + ${fmt2(g.S3)}) = ${fmt2(g.Re_par)} Ω`);
     lines.push("");
 
-    lines.push("5) A két ág párhuzamos:");
-    lines.push("      Re_vert × Re_right");
-    lines.push("   Re_mid = ---------------- =");
-    lines.push("      Re_vert + Re_right");
-    lines.push(`         (${fmt2(b.R_vert)} × ${fmt2(b.R_right)}) / (${fmt2(b.R_vert)} + ${fmt2(b.R_right)}) = ${fmt2(b.R_mid)} Ω`);
-    lines.push("");
-
-    lines.push("6) Teljes eredő (soros):");
-    lines.push("   Re = Re_leftTop + Re_mid + Re_leftBot");
-    lines.push(`   Re = ${fmt2(b.R_leftTop)} + ${fmt2(b.R_mid)} + ${fmt2(b.R_leftBot)} = ${fmt2(state.Re)} Ω`);
+    // 3) Final series
+    lines.push("3) Teljes eredő (Re) soros összeadás:");
+    lines.push("   Re = (A→közép) + Re1 + (közép→B)");
+    lines.push(`   Re = ${fmt2(g.S1)} + ${fmt2(g.Re_par)} + ${fmt2(g.S4)} = ${fmt2(state.Re)} Ω`);
 
     return lines.join("\n");
   }
@@ -227,7 +234,6 @@
     const w = cv.width, h = cv.height;
     ctx.clearRect(0, 0, w, h);
 
-    // no grid, just soft glow
     ctx.save();
     const grad = ctx.createRadialGradient(w*0.25, h*0.2, 40, w*0.5, h*0.5, w*0.75);
     grad.addColorStop(0, "rgba(53,224,198,.08)");
@@ -247,10 +253,9 @@
     line(L, A, R, A);
     line(L, B, R, B);
     line(M, A, M, B);
-    line(R, A, R, B); // right short
+    line(R, A, R, B);
     ctx.restore();
 
-    // Labels A/B
     ctx.save();
     ctx.fillStyle = "rgba(233,243,255,.95)";
     ctx.font = "800 24px ui-sans-serif, system-ui";
@@ -312,7 +317,6 @@
   function drawResistor(s, r) {
     ctx.save();
 
-    // block
     ctx.lineWidth = 3;
     ctx.strokeStyle = "rgba(233,243,255,.92)";
     ctx.fillStyle = "rgba(53,224,198,.10)";
@@ -321,7 +325,6 @@
     ctx.fill();
     ctx.stroke();
 
-    // text with outline (so it stays visible over wires)
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
