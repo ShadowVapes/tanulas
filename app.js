@@ -1,42 +1,38 @@
 (() => {
-  // ====== UI ======
   const cv = document.getElementById("cv");
   const ctx = cv.getContext("2d");
+
   const ansEl = document.getElementById("ans");
   const resEl = document.getElementById("result");
   const workEl = document.getElementById("work");
+
   const btnNew = document.getElementById("btnNew");
   const btnCheck = document.getElementById("btnCheck");
   const btnReveal = document.getElementById("btnReveal");
   const btnCopy = document.getElementById("btnCopy");
 
-  // ====== Random helpers ======
   const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
   const randInt = (a, b) => Math.floor(a + Math.random() * (b - a + 1));
 
-  // E12-ish értékek (ohm), skálázva
   const BASES = [10, 12, 15, 18, 22, 27, 33, 39, 47, 56, 68, 82];
   function randomOhms() {
     const mult = pick([1, 10, 100]); // 10..8200
     const val = pick(BASES) * mult;
-    // néha legyen "szebb" kerekítés (pl 100, 220, 330)
-    const spice = Math.random();
-    if (spice < 0.18) return pick([100, 120, 150, 180, 220, 270, 330, 390, 470, 560, 680, 820]);
+    if (Math.random() < 0.18) return pick([100, 120, 150, 180, 220, 270, 330, 390, 470, 560, 680, 820]);
     return val;
   }
 
-  // ====== Circuit definition (slots) ======
-  // Top rail: A_L -> TL1 -> TL2 -> A_M -> TR1 -> TR2 -> A_R
-  // Bottom rail: B_L -> BL1 -> BL2 -> B_M -> BR1 -> BR2 -> B_R
-  // Vertical: A_M -> V1 -> V2 -> B_M
-  // Right wire short: A_R == B_R (edge with ~0 ohm)
-  const SLOT_KEYS = [
-    "TL1","TL2","TR1","TR2",
-    "BL1","BL2","BR1","BR2",
-    "V1","V2"
-  ];
+  // 10 possible positions
+  const SLOTS = ["TL1","TL2","TR1","TR2","BL1","BL2","BR1","BR2","V1","V2"];
+  const GROUPS = {
+    leftTop: ["TL1","TL2"],
+    leftBot: ["BL1","BL2"],
+    rightTop: ["TR1","TR2"],
+    rightBot: ["BR1","BR2"],
+    vert: ["V1","V2"],
+    rightBranch: ["TR1","TR2","BR1","BR2"]
+  };
 
-  // Slot positions for drawing (canvas coords)
   const P = {
     A_y: 130,
     B_y: 390,
@@ -44,291 +40,184 @@
     M_x: 560,
     R_x: 980,
 
-    // slot x coords
     TL1_x: 250, TL2_x: 410, TR1_x: 680, TR2_x: 840,
     BL1_x: 250, BL2_x: 410, BR1_x: 680, BR2_x: 840,
 
     V1_y: 220, V2_y: 300
   };
 
-  // ====== State ======
   let state = null;
 
-  function newProblem() {
-    // Randomly decide which slots get resistors (some can be "wire" = none)
-    // To keep it interesting, ensure at least 1 resistor on each rail side and on vertical.
-    const present = {};
-    for (const k of SLOT_KEYS) present[k] = Math.random() < 0.80; // 80% filled
-    // enforce minimums
-    if (![present.TL1,present.TL2].some(Boolean)) present[pick(["TL1","TL2"])] = true;
-    if (![present.TR1,present.TR2].some(Boolean)) present[pick(["TR1","TR2"])] = true;
-    if (![present.BL1,present.BL2].some(Boolean)) present[pick(["BL1","BL2"])] = true;
-    if (![present.BR1,present.BR2].some(Boolean)) present[pick(["BR1","BR2"])] = true;
-    if (![present.V1,present.V2].some(Boolean)) present[pick(["V1","V2"])] = true;
+  function setResult(text, cls) {
+    resEl.className = `result ${cls || ""}`.trim();
+    resEl.textContent = text;
+  }
 
-    const R = {};
-    for (const k of SLOT_KEYS) {
-      if (present[k]) R[k] = randomOhms();
+  function fmt2(v) {
+    return Number(v).toFixed(2);
+  }
+
+  function parallel2(a, b) {
+    return (a * b) / (a + b);
+  }
+
+  function joinSeriesFormula(names) {
+    return names.join("+");
+  }
+
+  function newProblem() {
+    const k = randInt(2, 10);
+
+    const chosen = new Set();
+    // ensure parallel part exists
+    chosen.add(pick(GROUPS.vert));
+    chosen.add(pick(GROUPS.rightBranch));
+
+    while (chosen.size < k) chosen.add(pick(SLOTS));
+
+    const resistors = [];
+    let i = 1;
+    for (const slot of chosen) {
+      resistors.push({ slot, name: `R${i}`, value: randomOhms() });
+      i++;
     }
 
-    // Build circuit graph and solve
-    const { graph, nodes, edges } = buildGraph(present, R);
-    const solution = solveReqNodal(graph, "A_L", "B_L");
+    const slotToR = {};
+    for (const r of resistors) slotToR[r.slot] = r;
+
+    const sum = (arr) => arr.reduce((a, r) => a + r.value, 0);
+
+    const R_leftTop_list = GROUPS.leftTop.map(s => slotToR[s]).filter(Boolean);
+    const R_leftBot_list = GROUPS.leftBot.map(s => slotToR[s]).filter(Boolean);
+
+    const R_vert_list = GROUPS.vert.map(s => slotToR[s]).filter(Boolean);
+    const R_rightTop_list = GROUPS.rightTop.map(s => slotToR[s]).filter(Boolean);
+    const R_rightBot_list = GROUPS.rightBot.map(s => slotToR[s]).filter(Boolean);
+
+    const R_leftTop = sum(R_leftTop_list);
+    const R_leftBot = sum(R_leftBot_list);
+    const R_vert = sum(R_vert_list);
+    const R_right = sum(R_rightTop_list) + sum(R_rightBot_list);
+
+    const R_mid = parallel2(R_vert, R_right);
+    const Re = R_leftTop + R_mid + R_leftBot;
 
     state = {
-      present,
-      R,
-      graph,
-      nodes,
-      edges,
-      req: solution.req,
-      work: solution.work
+      chosen,
+      resistors,
+      slotToR,
+      Re,
+      breakdown: {
+        R_leftTop_list, R_leftBot_list,
+        R_vert_list,
+        R_rightTop_list, R_rightBot_list,
+        R_leftTop, R_leftBot, R_vert, R_right, R_mid
+      }
     };
 
     ansEl.value = "";
-    setResult("Várja a válaszod…", "muted");
     workEl.textContent = "";
+    setResult("Számolj, aztán nyomj egy Ellenőrzést 👇", "muted");
     draw();
   }
 
-  // ====== Graph builder ======
-  function buildGraph(present, Rvals) {
-    // Fixed node names
-    const nodes = new Set([
-      "A_L","A_TL1","A_TL2","A_M","A_TR1","A_TR2","A_R",
-      "B_L","B_BL1","B_BL2","B_M","B_BR1","B_BR2","B_R",
-      "V1","V2"
-    ]);
-
-    const edges = [];
-    const addEdge = (a, b, ohms, label) => {
-      // ignore super tiny
-      edges.push({ a, b, r: ohms, label });
-    };
-
-    // Helper: slot between two nodes
-    function addSlot(key, a, b) {
-      if (present[key]) addEdge(a, b, Rvals[key], key);
-      else addEdge(a, b, 1e-9, key + "_WIRE"); // ideal wire (approx), for solver stability
-    }
-
-    // Top left (2 slots)
-    addSlot("TL1", "A_L", "A_TL1");
-    addSlot("TL2", "A_TL1", "A_TL2");
-    // Wire to mid
-    addEdge("A_TL2", "A_M", 1e-9, "TOP_WIRE_L2M");
-
-    // Top right (2 slots)
-    addSlot("TR1", "A_M", "A_TR1");
-    addSlot("TR2", "A_TR1", "A_TR2");
-    addEdge("A_TR2", "A_R", 1e-9, "TOP_WIRE_R2END");
-
-    // Bottom left (2 slots)
-    addSlot("BL1", "B_L", "B_BL1");
-    addSlot("BL2", "B_BL1", "B_BL2");
-    addEdge("B_BL2", "B_M", 1e-9, "BOT_WIRE_L2M");
-
-    // Bottom right (2 slots)
-    addSlot("BR1", "B_M", "B_BR1");
-    addSlot("BR2", "B_BR1", "B_BR2");
-    addEdge("B_BR2", "B_R", 1e-9, "BOT_WIRE_R2END");
-
-    // Vertical (2 slots)
-    addSlot("V1", "A_M", "V1");
-    addSlot("V2", "V1", "V2");
-    addEdge("V2", "B_M", 1e-9, "V_WIRE_2M");
-
-    // Right-side short between A_R and B_R (so right side matters)
-    addEdge("A_R", "B_R", 1e-9, "RIGHT_SHORT");
-
-    // Build adjacency
-    const graph = {};
-    for (const n of nodes) graph[n] = [];
-    for (const e of edges) {
-      graph[e.a].push(e);
-      graph[e.b].push({ a: e.b, b: e.a, r: e.r, label: e.label }); // undirected
-    }
-    return { graph, nodes: [...nodes], edges };
-  }
-
-  // ====== Nodal solver: inject 1A from A to B, solve V, Req = V(A)-V(B) ======
-  function solveReqNodal(graph, nodeA, nodeB) {
-    // Choose nodeB as ground (0V). Unknowns are all other nodes that are reachable.
-    const reachable = collectReachable(graph, nodeA);
-    reachable.add(nodeB);
-
-    const nodes = [...reachable];
-    const idx = new Map();
-    for (let i = 0; i < nodes.length; i++) idx.set(nodes[i], i);
-
-    // Unknown nodes exclude ground
-    const ground = nodeB;
-    const unknown = nodes.filter(n => n !== ground);
-    const N = unknown.length;
-
-    // Build G matrix and I vector (G*V = I)
-    const G = Array.from({ length: N }, () => Array(N).fill(0));
-    const I = Array(N).fill(0);
-
-    // Current injection: +1A into nodeA, -1A into ground
-    // In nodal equation for unknown nodes: I[k] is net injected current.
-    const inj = (n, val) => {
-      if (n === ground) return;
-      I[unknown.indexOf(n)] += val;
-    };
-    inj(nodeA, +1.0);
-    // ground gets -1A implicitly
-
-    // Fill conductances
-    // For each edge u-v with resistance r:
-    // G_uu += 1/r, G_vv += 1/r, G_uv -= 1/r, G_vu -= 1/r (except when ground involved)
-    const seen = new Set();
-    for (const u of nodes) {
-      for (const e of graph[u] || []) {
-        const v = e.b;
-        const key = u < v ? `${u}|${v}|${e.label}` : `${v}|${u}|${e.label}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-
-        if (!reachable.has(u) || !reachable.has(v)) continue;
-
-        const g = 1 / e.r;
-
-        const iu = unknown.indexOf(u);
-        const iv = unknown.indexOf(v);
-
-        if (u !== ground) G[iu][iu] += g;
-        if (v !== ground) G[iv][iv] += g;
-        if (u !== ground && v !== ground) {
-          G[iu][iv] -= g;
-          G[iv][iu] -= g;
-        }
-        // If one side is ground, it only affects diagonal of the other (already handled).
-      }
-    }
-
-    const V = gaussianSolve(G, I); // returns unknown voltages
-    const Vmap = {};
-    for (let i = 0; i < unknown.length; i++) Vmap[unknown[i]] = V[i];
-    Vmap[ground] = 0;
-
-    const req = Vmap[nodeA] - Vmap[nodeB]; // since 1A
-
-    const work = buildWorkText({ graph, nodeA, nodeB, unknown, G, I, Vmap, req });
-    return { req, Vmap, work };
-  }
-
-  function collectReachable(graph, start) {
-    const vis = new Set();
-    const st = [start];
-    while (st.length) {
-      const u = st.pop();
-      if (vis.has(u)) continue;
-      vis.add(u);
-      for (const e of graph[u] || []) {
-        const v = e.b;
-        if (!vis.has(v)) st.push(v);
-      }
-    }
-    return vis;
-  }
-
-  // Gaussian elimination with partial pivot
-  function gaussianSolve(A, b) {
-    const n = A.length;
-    // copy
-    const M = A.map(row => row.slice());
-    const x = b.slice();
-
-    for (let col = 0; col < n; col++) {
-      // pivot
-      let pivot = col;
-      let best = Math.abs(M[col][col]);
-      for (let r = col + 1; r < n; r++) {
-        const v = Math.abs(M[r][col]);
-        if (v > best) { best = v; pivot = r; }
-      }
-      if (best < 1e-18) throw new Error("Szinguláris mátrix / rossz hálózat.");
-
-      if (pivot !== col) {
-        [M[pivot], M[col]] = [M[col], M[pivot]];
-        [x[pivot], x[col]] = [x[col], x[pivot]];
-      }
-
-      // normalize row
-      const diag = M[col][col];
-      for (let c = col; c < n; c++) M[col][c] /= diag;
-      x[col] /= diag;
-
-      // eliminate
-      for (let r = 0; r < n; r++) {
-        if (r === col) continue;
-        const f = M[r][col];
-        if (Math.abs(f) < 1e-18) continue;
-        for (let c = col; c < n; c++) M[r][c] -= f * M[col][c];
-        x[r] -= f * x[col];
-      }
-    }
-    return x;
-  }
-
-  function fmtOhm(v) {
-    if (!isFinite(v)) return String(v);
-    const abs = Math.abs(v);
-    if (abs >= 1000) return (v/1000).toFixed(4).replace(/0+$/,'').replace(/\.$/,'') + " kΩ";
-    return v.toFixed(6).replace(/0+$/,'').replace(/\.$/,'') + " Ω";
-  }
-
-  function matrixToText(G, I, unknown) {
+  function buildWork() {
+    const b = state.breakdown;
     const lines = [];
-    lines.push("Ismeretlen csomópontfeszültségek (B_L = 0 V föld):");
-    lines.push("  " + unknown.map(n => n.padEnd(6)).join(" "));
+
+    lines.push("Jelölések:");
+    lines.push("  Ellenállások: R1, R2, ...");
+    lines.push("  Eredő: Re");
     lines.push("");
-    lines.push("G mátrix és I vektor (G·V = I):");
-    for (let r = 0; r < G.length; r++) {
-      const row = G[r].map(v => v.toExponential(3).padStart(12)).join(" ");
-      lines.push(row + "   |   " + I[r].toFixed(3));
+
+    lines.push("Adatok:");
+    state.resistors
+      .slice()
+      .sort((x,y)=> Number(x.name.slice(1)) - Number(y.name.slice(1)))
+      .forEach(r => lines.push(`  ${r.name} = ${r.value} Ω`));
+    lines.push("");
+
+    if (b.R_leftTop_list.length > 0) {
+      const names = b.R_leftTop_list.map(r => r.name);
+      lines.push("1) Bal felső rész (soros):");
+      lines.push(`   Re_leftTop = ${joinSeriesFormula(names)} = ${fmt2(b.R_leftTop)} Ω`);
+      lines.push("");
+    } else {
+      lines.push("1) Bal felső rész: nincs ellenállás (vezeték), ezért Re_leftTop = 0 Ω");
+      lines.push("");
     }
+
+    if (b.R_leftBot_list.length > 0) {
+      const names = b.R_leftBot_list.map(r => r.name);
+      lines.push("2) Bal alsó rész (soros):");
+      lines.push(`   Re_leftBot = ${joinSeriesFormula(names)} = ${fmt2(b.R_leftBot)} Ω`);
+      lines.push("");
+    } else {
+      lines.push("2) Bal alsó rész: nincs ellenállás (vezeték), ezért Re_leftBot = 0 Ω");
+      lines.push("");
+    }
+
+    const vNames = b.R_vert_list.map(r => r.name);
+    lines.push("3) Középső ág (soros):");
+    lines.push(`   Re_vert = ${joinSeriesFormula(vNames)} = ${fmt2(b.R_vert)} Ω`);
+    lines.push("");
+
+    const rNames = [...b.R_rightTop_list, ...b.R_rightBot_list].map(r => r.name);
+    lines.push("4) Jobb oldali kerülő ág (soros):");
+    lines.push(`   Re_right = ${joinSeriesFormula(rNames)} = ${fmt2(b.R_right)} Ω`);
+    lines.push("");
+
+    lines.push("5) A két ág párhuzamos:");
+    lines.push("      Re_vert × Re_right");
+    lines.push("   Re_mid = ---------------- =");
+    lines.push("      Re_vert + Re_right");
+    lines.push(`         (${fmt2(b.R_vert)} × ${fmt2(b.R_right)}) / (${fmt2(b.R_vert)} + ${fmt2(b.R_right)}) = ${fmt2(b.R_mid)} Ω`);
+    lines.push("");
+
+    lines.push("6) Teljes eredő (soros):");
+    lines.push("   Re = Re_leftTop + Re_mid + Re_leftBot");
+    lines.push(`   Re = ${fmt2(b.R_leftTop)} + ${fmt2(b.R_mid)} + ${fmt2(b.R_leftBot)} = ${fmt2(state.Re)} Ω`);
+
     return lines.join("\n");
   }
 
-  function buildWorkText({ graph, nodeA, nodeB, unknown, G, I, Vmap, req }) {
-    const lines = [];
-    lines.push("Levezetés (nodális módszer, 1 A tesztáram):");
-    lines.push("");
-    lines.push(`Cél: R_eredő az ${nodeA} és ${nodeB} között.`);
-    lines.push(`Beállítás: ${nodeB} = 0 V (föld). Befecskendezünk +1 A áramot ${nodeA}-ba, és -1 A megy a földbe.`);
-    lines.push("Ekkor R_eredő = (V(nodeA) - V(nodeB)) / 1A = V(nodeA).");
-    lines.push("");
-
-    // list elements (only real resistors, not wires)
-    const real = [];
-    const seen = new Set();
-    for (const u in graph) {
-      for (const e of graph[u]) {
-        const a = u, b = e.b;
-        const key = a < b ? `${a}|${b}|${e.label}` : `${b}|${a}|${e.label}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        if (e.r > 1e-6) real.push({ a, b, r: e.r, label: e.label });
-      }
+  function check() {
+    if (!state) return;
+    const user = Number(ansEl.value);
+    if (!isFinite(user)) {
+      setResult("Tesó, számként írd be (pl. 123.45).", "bad");
+      return;
     }
 
-    lines.push("Ellenállások (a rajzon látható fogyasztók):");
-    for (const e of real.sort((x,y)=>x.label.localeCompare(y.label))) {
-      lines.push(`  ${e.label}: ${e.a} — ${e.b} = ${e.r} Ω`);
-    }
-    lines.push("");
+    const real = state.Re;
+    const tol = Math.max(Math.abs(real) * 0.005, 0.05);
+    const ok = Math.abs(user - real) <= tol;
 
-    lines.push(matrixToText(G, I, unknown));
-    lines.push("");
-    lines.push("Megoldott feszültségek (V):");
-    for (const n of Object.keys(Vmap).sort()) {
-      lines.push(`  ${n}: ${Vmap[n].toFixed(6)} V`);
+    const realTxt = fmt2(real);
+    if (ok) setResult(`Helyes ✅  Re = ${realTxt} Ω`, "good");
+    else setResult(`Nem jó ❌  Helyes: Re = ${realTxt} Ω`, "bad");
+
+    workEl.textContent = buildWork();
+  }
+
+  function reveal() {
+    if (!state) return;
+    setResult(`Megoldás: Re = ${fmt2(state.Re)} Ω`, "muted");
+    workEl.textContent = buildWork();
+  }
+
+  async function copyWork() {
+    const txt = workEl.textContent || "";
+    if (!txt.trim()) {
+      setResult("Nincs még levezetés. Nyomj Ellenőrzést vagy Megoldást.", "muted");
+      return;
     }
-    lines.push("");
-    lines.push(`=> R_eredő = V(${nodeA}) = ${req.toFixed(6)} Ω`);
-    return lines.join("\n");
+    try {
+      await navigator.clipboard.writeText(txt);
+      setResult("Levezetés kimásolva 📋", "good");
+    } catch {
+      setResult("Nem tudtam vágólapra másolni (böngésző tiltja).", "bad");
+    }
   }
 
   // ====== Drawing ======
@@ -338,63 +227,45 @@
     const w = cv.width, h = cv.height;
     ctx.clearRect(0, 0, w, h);
 
-    // background grid-ish
+    // no grid, just soft glow
     ctx.save();
-    ctx.globalAlpha = 0.16;
-    ctx.strokeStyle = "#6bdcff";
-    ctx.lineWidth = 1;
-    for (let x = 0; x <= w; x += 40) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
-      ctx.stroke();
-    }
-    for (let y = 0; y <= h; y += 40) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
-      ctx.stroke();
-    }
+    const grad = ctx.createRadialGradient(w*0.25, h*0.2, 40, w*0.5, h*0.5, w*0.75);
+    grad.addColorStop(0, "rgba(53,224,198,.08)");
+    grad.addColorStop(0.6, "rgba(69,166,255,.05)");
+    grad.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,w,h);
     ctx.restore();
 
-    // wires
     const A = P.A_y, B = P.B_y;
     const L = P.L_x, M = P.M_x, R = P.R_x;
 
     ctx.save();
     ctx.strokeStyle = "#dff6ff";
-    ctx.lineWidth = 6;
+    ctx.lineWidth = 7;
     ctx.lineCap = "round";
-
-    // Top rail
     line(L, A, R, A);
-    // Bottom rail
     line(L, B, R, B);
-    // Center vertical wire (full, resistors will overlay)
     line(M, A, M, B);
-    // Right short
-    line(R, A, R, B);
-
+    line(R, A, R, B); // right short
     ctx.restore();
 
-    // Labels
+    // Labels A/B
     ctx.save();
-    ctx.fillStyle = "#bfe9ff";
-    ctx.font = "700 22px ui-sans-serif, system-ui";
-    ctx.fillText("A", L - 55, A + 8);
-    ctx.fillText("B", L - 55, B + 8);
+    ctx.fillStyle = "rgba(233,243,255,.95)";
+    ctx.font = "800 24px ui-sans-serif, system-ui";
+    ctx.fillText("A", L - 55, A + 9);
+    ctx.fillText("B", L - 55, B + 9);
 
-    ctx.font = "600 13px ui-sans-serif, system-ui";
-    ctx.fillStyle = "rgba(191,233,255,.85)";
-    ctx.fillText("Kapcsok: A_L és B_L (bal oldal)", 22, 28);
-    ctx.fillText("Jobb oldali rövidzár: A_R = B_R", 22, 48);
+    ctx.font = "700 13px ui-sans-serif, system-ui";
+    ctx.fillStyle = "rgba(156,179,201,.95)";
+    ctx.fillText("Kapcsok: A–B (bal oldal)", 22, 30);
+    ctx.fillText("Jobb oldali rövidzár: a két sín össze van kötve", 22, 50);
     ctx.restore();
 
-    // draw resistors as blocks on slots
-    const slots = slotDrawList(state.present, state.R);
-    for (const s of slots) drawResistor(s.x1, s.y1, s.x2, s.y2, s.label, s.value);
+    const slots = slotDrawList(state.slotToR);
+    for (const s of slots) drawResistor(s, state.slotToR[s.key]);
 
-    // terminals dots
     ctx.save();
     ctx.fillStyle = "#35e0c6";
     dot(L, A, 8);
@@ -402,9 +273,10 @@
     ctx.fillStyle = "#45a6ff";
     dot(M, A, 7);
     dot(M, B, 7);
+    dot(R, A, 7);
+    dot(R, B, 7);
     ctx.restore();
 
-    // helper funcs
     function line(x1,y1,x2,y2){
       ctx.beginPath();
       ctx.moveTo(x1,y1);
@@ -418,67 +290,61 @@
     }
   }
 
-  function slotDrawList(present, R) {
+  function slotDrawList(slotToR) {
     const A = P.A_y, B = P.B_y;
-    const list = [];
+    const list = [
+      { key:"TL1", x:P.L_x+140, y:A, w:130, h:56 },
+      { key:"TL2", x:P.TL1_x+160, y:A, w:130, h:56 },
+      { key:"TR1", x:P.M_x+140, y:A, w:130, h:56 },
+      { key:"TR2", x:P.TR1_x+160, y:A, w:130, h:56 },
 
-    // Each resistor drawn as a rectangle centered on the segment
-    // TL1: between x=L..TL1_x
-    if (present.TL1) list.push({ x1: P.L_x+35, y1:A, x2:P.TL1_x-35, y2:A, label:"TL1", value:R.TL1 });
-    if (present.TL2) list.push({ x1: P.TL1_x+35, y1:A, x2:P.TL2_x-35, y2:A, label:"TL2", value:R.TL2 });
-    if (present.TR1) list.push({ x1: P.M_x+35, y1:A, x2:P.TR1_x-35, y2:A, label:"TR1", value:R.TR1 });
-    if (present.TR2) list.push({ x1: P.TR1_x+35, y1:A, x2:P.TR2_x-35, y2:A, label:"TR2", value:R.TR2 });
+      { key:"BL1", x:P.L_x+140, y:B, w:130, h:56 },
+      { key:"BL2", x:P.BL1_x+160, y:B, w:130, h:56 },
+      { key:"BR1", x:P.M_x+140, y:B, w:130, h:56 },
+      { key:"BR2", x:P.BR1_x+160, y:B, w:130, h:56 },
 
-    if (present.BL1) list.push({ x1: P.L_x+35, y1:B, x2:P.BL1_x-35, y2:B, label:"BL1", value:R.BL1 });
-    if (present.BL2) list.push({ x1: P.BL1_x+35, y1:B, x2:P.BL2_x-35, y2:B, label:"BL2", value:R.BL2 });
-    if (present.BR1) list.push({ x1: P.M_x+35, y1:B, x2:P.BR1_x-35, y2:B, label:"BR1", value:R.BR1 });
-    if (present.BR2) list.push({ x1: P.BR1_x+35, y1:B, x2:P.BR2_x-35, y2:B, label:"BR2", value:R.BR2 });
-
-    // Vertical
-    if (present.V1) list.push({ x1:P.M_x, y1:P.A_y+35, x2:P.M_x, y2:P.V1_y-35, label:"V1", value:R.V1 });
-    if (present.V2) list.push({ x1:P.M_x, y1:P.V1_y+35, x2:P.M_x, y2:P.V2_y-35, label:"V2", value:R.V2 });
-
-    return list;
+      { key:"V1", x:P.M_x, y:P.A_y+110, w:70, h:118 },
+      { key:"V2", x:P.M_x, y:P.V1_y+120, w:70, h:118 }
+    ];
+    return list.filter(s => slotToR[s.key]);
   }
 
-  function drawResistor(x1,y1,x2,y2,label,val){
-    const midx = (x1+x2)/2, midy = (y1+y2)/2;
-    const horizontal = Math.abs(y1-y2) < 2;
-
+  function drawResistor(s, r) {
     ctx.save();
 
-    // outer block
+    // block
     ctx.lineWidth = 3;
-    ctx.strokeStyle = "rgba(233,243,255,.95)";
+    ctx.strokeStyle = "rgba(233,243,255,.92)";
     ctx.fillStyle = "rgba(53,224,198,.10)";
     ctx.beginPath();
-
-    if (horizontal) {
-      const w = Math.max(86, Math.abs(x2-x1));
-      const h = 46;
-      ctx.roundRect(midx - w/2, midy - h/2, w, h, 10);
-    } else {
-      const w = 54;
-      const h = Math.max(86, Math.abs(y2-y1));
-      ctx.roundRect(midx - w/2, midy - h/2, w, h, 10);
-    }
+    ctx.roundRect(s.x - s.w/2, s.y - s.h/2, s.w, s.h, 12);
     ctx.fill();
     ctx.stroke();
 
-    // text
-    ctx.fillStyle = "rgba(233,243,255,.95)";
-    ctx.font = "800 14px ui-sans-serif, system-ui";
+    // text with outline (so it stays visible over wires)
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(label, midx, midy - 10);
-    ctx.font = "700 14px ui-sans-serif, system-ui";
-    ctx.fillStyle = "rgba(233,243,255,.88)";
-    ctx.fillText(`${val} Ω`, midx, midy + 12);
+
+    ctx.font = "900 16px ui-sans-serif, system-ui";
+    ctx.fillStyle = "rgba(233,243,255,.98)";
+    ctx.strokeStyle = "rgba(0,0,0,.40)";
+    ctx.lineWidth = 4;
+    strokeFillText(r.name, s.x, s.y - 11);
+
+    ctx.font = "900 16px ui-sans-serif, system-ui";
+    ctx.fillStyle = "rgba(53,224,198,.98)";
+    ctx.strokeStyle = "rgba(0,0,0,.50)";
+    ctx.lineWidth = 4;
+    strokeFillText(`${r.value} Ω`, s.x, s.y + 15);
 
     ctx.restore();
   }
 
-  // roundRect polyfill for older canvas
+  function strokeFillText(txt, x, y) {
+    ctx.strokeText(txt, x, y);
+    ctx.fillText(txt, x, y);
+  }
+
   if (!CanvasRenderingContext2D.prototype.roundRect) {
     CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
       const rr = Math.min(r, w/2, h/2);
@@ -493,59 +359,11 @@
     };
   }
 
-  // ====== Check answer ======
-  function setResult(text, cls) {
-    resEl.className = `result ${cls || ""}`.trim();
-    resEl.textContent = text;
-  }
-
-  function check() {
-    if (!state) return;
-    const user = Number(ansEl.value);
-    if (!isFinite(user)) {
-      setResult("Tesó írd be számként az értéket. 😄", "bad");
-      return;
-    }
-    const real = state.req;
-
-    const tol = Math.max(Math.abs(real) * 0.005, 0.02); // 0.5% or 0.02Ω
-    const ok = Math.abs(user - real) <= tol;
-
-    if (ok) {
-      setResult(`Helyes ✅  (R_eredő = ${real.toFixed(6)} Ω)`, "good");
-    } else {
-      setResult(`Nem jó ❌  (helyes: ${real.toFixed(6)} Ω)`, "bad");
-    }
-    workEl.textContent = state.work;
-  }
-
-  function reveal() {
-    if (!state) return;
-    setResult(`Megoldás: R_eredő = ${state.req.toFixed(6)} Ω`, "muted");
-    workEl.textContent = state.work;
-  }
-
-  async function copyWork() {
-    const txt = workEl.textContent || "";
-    if (!txt.trim()) {
-      setResult("Nincs még levezetés a dobozban. Nyomj ellenőrzést vagy megoldást.", "muted");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(txt);
-      setResult("Levezetés kimásolva 📋", "good");
-    } catch {
-      setResult("Nem tudtam vágólapra másolni (böngésző tiltja).", "bad");
-    }
-  }
-
-  // ====== Events ======
   btnNew.addEventListener("click", newProblem);
   btnCheck.addEventListener("click", check);
   btnReveal.addEventListener("click", reveal);
   btnCopy.addEventListener("click", copyWork);
   ansEl.addEventListener("keydown", (e) => { if (e.key === "Enter") check(); });
 
-  // first load
   newProblem();
 })();

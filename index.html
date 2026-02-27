@@ -12,13 +12,12 @@
       <div>
         <h1>Eredő ellenállás (random)</h1>
         <p class="sub">
-          Írd be az <b>R<sub>eredő</sub></b>-t az A–B bal oldali kapcsok között.
-          A jobb oldalon a sínek össze vannak kötve (rövidzár), hogy minden elem számítson.
+          Számold ki a <b>Re</b>-t az <b>A</b> és <b>B</b> kapcsok között (bal oldalt). A fogyasztók <b>R1, R2, ...</b> jelölést kapnak.
         </p>
       </div>
       <div class="actions">
         <button id="btnNew" class="btn">Új feladat</button>
-        <button id="btnReveal" class="btn btnGhost">Mutasd a megoldást</button>
+        <button id="btnReveal" class="btn btnGhost">Megoldás + levezetés</button>
       </div>
     </header>
 
@@ -28,25 +27,25 @@
       <div class="io">
         <div class="field">
           <label for="ans">Te válaszod (Ω)</label>
-          <input id="ans" type="number" inputmode="decimal" step="0.001" placeholder="pl. 42.5" />
-          <small>Elfogadás: ±0.5% vagy ±0.02 Ω (amelyik nagyobb).</small>
+          <input id="ans" type="number" inputmode="decimal" step="0.01" placeholder="pl. 42.50" />
+          <small>Eredmény 2 tizedesjeggyel. Elfogadás: ±0.5% vagy ±0.05 Ω (amelyik nagyobb).</small>
         </div>
 
         <div class="field">
           <button id="btnCheck" class="btn btnOk">Ellenőrzés</button>
-          <button id="btnCopy" class="btn btnGhost">Másold a levezetést</button>
+          <button id="btnCopy" class="btn btnGhost">Levezetés másolása</button>
         </div>
       </div>
     </section>
 
     <section class="card">
       <h2>Eredmény</h2>
-      <div id="result" class="result muted">Várja a válaszod…</div>
+      <div id="result" class="result muted">Nyomj egy „Új feladat”-ot, aztán számolj 😄</div>
       <pre id="work" class="work"></pre>
     </section>
 
     <footer class="foot">
-      <span>Made for GitHub Pages • HTML/CSS/JS • Canvas rajz</span>
+      <span>GitHub Pages • HTML/CSS/JS • Series/Parallel feladat</span>
     </footer>
   </div>
 
